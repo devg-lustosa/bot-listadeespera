@@ -9,12 +9,10 @@ const client = new Client({
   ],
 });
 
-// Carrega IDs dos canais de espera do .env
 const ESPERA_CHANNEL_IDS = (process.env.ESPERA_CHANNEL_IDS || "")
   .split(",")
-  .filter((id) => id); // evita erro se estiver vazio
+  .filter((id) => id);
 
-// Estrutura para armazenar dados por servidor
 let servidores = {};
 
 client.once("ready", () => {
@@ -27,20 +25,16 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
 
   const guildId = member.guild.id;
 
-  // Inicializa dados do servidor se necessário
   if (!servidores[guildId]) {
     servidores[guildId] = {
       contador: 1,
       esperaLista: [],
       apelidosOriginais: {},
+      timeouts: {},
     };
   }
 
   const dados = servidores[guildId];
-
-  console.log(
-    `🎧 Movimento detectado em ${member.guild.name}: ${member.user.username}`
-  );
 
   const entrouNaEspera =
     newState.channelId && ESPERA_CHANNEL_IDS.includes(newState.channelId);
@@ -50,9 +44,17 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
     (!newState.channelId || !ESPERA_CHANNEL_IDS.includes(newState.channelId));
 
   if (entrouNaEspera) {
+    // Se tinha timeout pendente, cancela
+    if (dados.timeouts[member.id]) {
+      clearTimeout(dados.timeouts[member.id]);
+      delete dados.timeouts[member.id];
+      console.log(
+        `⏳ [${member.guild.name}] Timeout cancelado para ${member.user.username}, voltou a tempo.`
+      );
+    }
+
     if (dados.esperaLista.includes(member.id)) return;
 
-    // Salva apelido original
     dados.apelidosOriginais[member.id] = member.nickname || null;
 
     const apelidoNovo = `E-${String(dados.contador).padStart(2, "0")} ${
@@ -75,35 +77,43 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
   }
 
   if (saiuDaEspera) {
-    dados.esperaLista = dados.esperaLista.filter((id) => id !== member.id);
+    // Inicia timeout de 5 minutos antes de restaurar apelido
+    dados.timeouts[member.id] = setTimeout(async () => {
+      const apelidoOriginal = dados.apelidosOriginais[member.id];
+      try {
+        // Buscar o membro novamente pelo guild
+        const membroAtual = await oldState.guild.members.fetch(member.id);
+        await membroAtual.setNickname(apelidoOriginal);
+        console.log(
+          `🔄 [${member.guild.name}] Apelido restaurado para: ${
+            apelidoOriginal || membroAtual.user.username
+          }`
+        );
+      } catch (err) {
+        console.error(
+          `❌ [${member.guild.name}] Erro ao restaurar apelido de ${member.user.username}:`,
+          err.message
+        );
+      }
 
-    const apelidoOriginal = dados.apelidosOriginais[member.id];
-    try {
-      await member.setNickname(apelidoOriginal);
-      console.log(
-        `🔄 [${member.guild.name}] Apelido restaurado para: ${
-          apelidoOriginal || member.user.username
-        }`
-      );
-    } catch (err) {
-      console.error(
-        `❌ [${member.guild.name}] Erro ao restaurar apelido de ${member.user.username}:`,
-        err.message
-      );
-    }
+      dados.esperaLista = dados.esperaLista.filter((id) => id !== member.id);
+      delete dados.apelidosOriginais[member.id];
+      delete dados.timeouts[member.id];
 
-    delete dados.apelidosOriginais[member.id];
+      const canal = oldState.channel;
+      if (canal && canal.members.size === 0) {
+        dados.contador = 1;
+        dados.esperaLista = [];
+        dados.apelidosOriginais = {};
+        console.log(
+          `♻️ [${member.guild.name}] Canal vazio, lista e contador resetados!`
+        );
+      }
+    }, 3 * 60 * 1000); // 3 minutos
 
-    // 🔎 Verifica se o canal ficou vazio
-    const canal = oldState.channel;
-    if (canal && canal.members.size === 0) {
-      dados.contador = 1;
-      dados.esperaLista = [];
-      dados.apelidosOriginais = {};
-      console.log(
-        `♻️ [${member.guild.name}] Canal vazio, lista e contador resetados!`
-      );
-    }
+    console.log(
+      `⏳ [${member.guild.name}] Timeout iniciado para ${member.user.username} (5 min).`
+    );
   }
 });
 

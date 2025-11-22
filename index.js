@@ -9,8 +9,10 @@ const client = new Client({
   ],
 });
 
-// Lista de IDs de canais de espera (vem do .env)
-const ESPERA_CHANNEL_IDS = process.env.ESPERA_CHANNEL_IDS.split(",");
+// Carrega IDs dos canais de espera do .env
+const ESPERA_CHANNEL_IDS = (process.env.ESPERA_CHANNEL_IDS || "")
+  .split(",")
+  .filter((id) => id); // evita erro se estiver vazio
 
 // Estrutura para armazenar dados por servidor
 let servidores = {};
@@ -91,6 +93,17 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
     }
 
     delete dados.apelidosOriginais[member.id];
+
+    // 🔎 Verifica se o canal ficou vazio
+    const canal = oldState.channel;
+    if (canal && canal.members.size === 0) {
+      dados.contador = 1;
+      dados.esperaLista = [];
+      dados.apelidosOriginais = {};
+      console.log(
+        `♻️ [${member.guild.name}] Canal vazio, lista e contador resetados!`
+      );
+    }
   }
 });
 

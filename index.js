@@ -11,7 +11,8 @@ const client = new Client({
 
 const ESPERA_CHANNEL_IDS = (process.env.ESPERA_CHANNEL_IDS || "")
   .split(",")
-  .filter((id) => id);
+  .map((id) => id.trim())
+  .filter((id) => id.length > 0);
 
 let servidores = {};
 
@@ -44,18 +45,19 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
     (!newState.channelId || !ESPERA_CHANNEL_IDS.includes(newState.channelId));
 
   if (entrouNaEspera) {
-    // Se tinha timeout pendente, cancela
+    // Cancela timeout pendente (voltou a tempo)
     if (dados.timeouts[member.id]) {
       clearTimeout(dados.timeouts[member.id]);
       delete dados.timeouts[member.id];
       console.log(
-        `⏳ [${member.guild.name}] Timeout cancelado para ${member.user.username}, voltou a tempo.`
+        `⏳ [${member.guild.name}] Timeout cancelado para ${member.user.username}, voltou à espera.`
       );
     }
 
     if (dados.esperaLista.includes(member.id)) return;
 
-    dados.apelidosOriginais[member.id] = member.nickname || null;
+    // Salva apelido original (null restaura ao username)
+    dados.apelidosOriginais[member.id] = member.nickname ?? null;
 
     const apelidoNovo = `E-${String(dados.contador).padStart(2, "0")} ${
       member.user.username
@@ -67,8 +69,7 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
       );
     } catch (err) {
       console.error(
-        `❌ [${member.guild.name}] Erro ao alterar apelido de ${member.user.username}:`,
-        err.message
+        `❌ [${member.guild.name}] Erro ao alterar apelido de ${member.user.username}: ${err.message}`
       );
     }
 
@@ -77,43 +78,53 @@ client.on("voiceStateUpdate", async (oldState, newState) => {
   }
 
   if (saiuDaEspera) {
-    // Inicia timeout de 5 minutos antes de restaurar apelido
-    dados.timeouts[member.id] = setTimeout(async () => {
-      const apelidoOriginal = dados.apelidosOriginais[member.id];
+    const DURACAO_MS = 3 * 60 * 1000; // 3 minutos
+    console.log(
+      `⏳ [${member.guild.name}] Timeout iniciado para ${member.user.username} (3 min).`
+    );
+
+    const apelidoOriginal = dados.apelidosOriginais[member.id] ?? null;
+
+    // Captura IDs para usar dentro do timeout
+    const membroId = member.id;
+
+    dados.timeouts[membroId] = setTimeout(async () => {
       try {
-        // Buscar o membro novamente pelo guild
-        const membroAtual = await oldState.guild.members.fetch(member.id);
-        await membroAtual.setNickname(apelidoOriginal);
+        const guild =
+          client.guilds.cache.get(guildId) ||
+          (await client.guilds.fetch(guildId));
+        const membroAtual = await guild.members.fetch(membroId);
+
+        await membroAtual.setNickname(apelidoOriginal); // null restaura
         console.log(
-          `🔄 [${member.guild.name}] Apelido restaurado para: ${
-            apelidoOriginal || membroAtual.user.username
+          `🔄 [${guild.name}] Apelido restaurado para: ${
+            apelidoOriginal ?? membroAtual.user.username
           }`
         );
       } catch (err) {
         console.error(
-          `❌ [${member.guild.name}] Erro ao restaurar apelido de ${member.user.username}:`,
-          err.message
+          `❌ [${member.guild?.name || guildId}] Erro ao restaurar apelido de ${
+            member.user.username
+          }: ${err.message}`
         );
+      } finally {
+        // Limpeza
+        dados.esperaLista = dados.esperaLista.filter((id) => id !== membroId);
+        delete dados.apelidosOriginais[membroId];
+        delete dados.timeouts[membroId];
+
+        // Reset se o canal antigo ficou vazio (protege contra null)
+        const canalAntigo = oldState.channel;
+        if (canalAntigo && canalAntigo.members.size === 0) {
+          dados.contador = 1;
+          dados.esperaLista = [];
+          dados.apelidosOriginais = {};
+          console.log(
+            `♻️ [${member.guild.name}] Canal vazio, lista e contador resetados!`
+          );
+        }
       }
-
-      dados.esperaLista = dados.esperaLista.filter((id) => id !== member.id);
-      delete dados.apelidosOriginais[member.id];
-      delete dados.timeouts[member.id];
-
-      const canal = oldState.channel;
-      if (canal && canal.members.size === 0) {
-        dados.contador = 1;
-        dados.esperaLista = [];
-        dados.apelidosOriginais = {};
-        console.log(
-          `♻️ [${member.guild.name}] Canal vazio, lista e contador resetados!`
-        );
-      }
-    }, 3 * 60 * 1000); // 3 minutos
-
-    console.log(
-      `⏳ [${member.guild.name}] Timeout iniciado para ${member.user.username} (5 min).`
-    );
+    }, DURACAO_MS);
   }
 });
 
